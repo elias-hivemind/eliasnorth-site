@@ -1,7 +1,5 @@
 services:
-  - type: static
+  - type: web
     name: eliasnorth-site
     env: static
-    buildCommand: ""
     staticPublishPath: .
-    branch: main
