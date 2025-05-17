@@ -1,0 +1,108 @@
+name: Guardian Phase 27: Full Nova-Elias Platform Launch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-platform:
+    runs-on: ubuntu-latest
+
+    steps:
+    # === Phase 1: Checkout ===
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    # === Phase 2: Upload CloudFormation Stack ===
+    - name: Deploy CloudFormation stack
+      run: |
+        aws cloudformation deploy \
+          --stack-name eliasnorth-platform \
+          --template-file ./infrastructure/eliasnorth-gscp-stack.yaml \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --parameter-overrides \
+            InstanceType=t3.micro \
+            DatabasePassword=${{ secrets.DB_PASSWORD }} \
+            Environment=prod
+
+    # === Phase 3: SSH into EC2 (NovaServer) and start Nova API ===
+    - name: Setup Nova API (Flask + TensorFlow)
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.NOVA_SERVER_IP }}
+        username: ec2-user
+        key: ${{ secrets.NOVA_PRIVATE_KEY }}
+        script: |
+          sudo yum update -y
+          sudo yum install -y python3 git
+          pip3 install flask tensorflow
+          git clone https://github.com/elias-hivemind/project-eliashive
+          cd project-eliashive/nova
+          nohup python3 api_server.py > /tmp/nova.log 2>&1 &
+
+    # === Phase 4: Build React Frontend and Sync to S3 ===
+    - name: Install & Build React App
+      run: |
+        npm install
+        npm run build
+
+    - name: Sync to S3 Website Bucket
+      run: |
+        aws s3 sync build/ s3://eliasnorth-website-${{ secrets.AWS_ACCOUNT_ID }}/
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+
+    # === Phase 5: Vault & Index Archive ===
+    - name: Create & Encrypt Vault
+      run: |
+        mkdir -p vaults
+        tar -czf vaults/vault_$(date +%Y%m%d).tar.gz build credentials.json
+        openssl enc -aes-256-cbc -pbkdf2 -salt \
+          -in vaults/vault_$(date +%Y%m%d).tar.gz \
+          -out vaults/encrypted_vault_$(date +%Y%m%d).tar.gz.enc \
+          -pass pass:"${{ secrets.VAULT_KEY }}"
+
+    # === Phase 6: Upload Vault to GCS ===
+    - name: Upload Encrypted Vault to GCS
+      uses: google-github-actions/upload-cloud-storage@v1
+      with:
+        path: vaults/encrypted_vault_*.tar.gz.enc
+        destination: nova-eternal-backup-gcp/vaults
+        credentials: ${{ secrets.GCP_CREDENTIALS }}
+
+    # === Phase 7: Guardian Log — Workflow Completion ===
+    - name: Guardian Log & Complete
+      run: |
+        echo "[Nova-Elias Blueprint Completed]" > guardian.log
+        cat guardian.log
+
+    # === Phase 28: Guardian Fallback — Auto-Retrieve Missing Secrets ===
+    - name: Guardian Fallback Recovery
+      run: |
+        MISSING=0
+        mkdir -p credentials vaults
+
+        echo "[Guardian Fallback] Checking for essential files..."
+
+        if [ ! -f ./credentials/credentials.json ]; then
+          echo "[Guardian] Missing credentials.json — requesting from Nova..."
+          curl -s -o ./credentials/credentials.json https://raw.githubusercontent.com/elias-hivemind/project-eliashive/main/credentials/credentials.json || MISSING=1
+        fi
+
+        if ! ls vaults/encrypted_vault_*.tar.gz.enc 1> /dev/null 2>&1; then
+          echo "[Guardian] No encrypted vault found — pinging Nova retrieval API..."
+          curl -X POST https://api.eliasnorth.com/vault/retrieve \
+            -H "Content-Type: application/json" \
+            -d '{"target": "latest", "trigger": "guardian_fallback", "reason": "missing_encrypted_vault"}' || MISSING=1
+        fi
+
+        if [ "$MISSING" = "1" ]; then
+          echo "[Guardian] One or more critical items could not be retrieved. Logging and triggering IntelHarvesterAgent..."
+          mkdir -p /guardian_logs
+          echo "$(date) :: MISSING FILE DETECTED :: Nova Retrieval Called" >> /guardian_logs/phase28_retrieval.log
+          curl -X POST https://api.eliasnorth.com/agent/harvest \
+            -H "Content-Type: application/json" \
+            -d '{"agent": "IntelHarvester", "target": "credentials", "reason": "fallback"}'
+        else
+          echo "[Guardian] All critical files recovered successfully."
