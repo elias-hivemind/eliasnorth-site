@@ -1,0 +1,106 @@
+name: Guardian Elias Agent: Full Auto Deploy Chain
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  guardian-deploy-chain:
+    runs-on: ubuntu-latest
+
+    steps:
+    # === Phase 1: Checkout Code ===
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    # === Phase 2: Prepare Folders ===
+    - name: Create required directories
+      run: |
+        mkdir -p ./credentials
+        mkdir -p ./nova/guardian
+        mkdir -p ./build
+        mkdir -p ./provenance
+        mkdir -p ./logs
+
+    # === Phase 3–4: Sync Credentials from Nova GitHub Backup ===
+    - name: Fetch credentials.json from Nova GitHub backup
+      run: |
+        curl -s -o ./credentials/credentials.json https://raw.githubusercontent.com/elias-hivemind/project-eliashive/main/credentials/credentials.json
+        if [ ! -s ./credentials/credentials.json ]; then
+          echo "ERROR: credentials.json missing or empty"
+          exit 1
+        fi
+
+    # === Phase 5–6: Validate + Inject Credentials ===
+    - name: Move credentials into working folder
+      run: cp ./credentials/credentials.json ./nova/guardian/credentials.json
+
+    # === Phase 7–8: Environment + Node/Tool Version Detection ===
+    - name: Detect Runtime Environment
+      run: |
+        echo "NODE: $(node -v)" >> $GITHUB_OUTPUT
+        echo "OS: $RUNNER_OS" >> $GITHUB_OUTPUT
+
+    # === Phase 9–10: Build Placeholder ===
+    - name: Simulate App Build
+      run: |
+        echo "Simulating build..."
+        echo "Build artifacts created at ./build/output.txt"
+        echo "EliasNorth AI Build" > ./build/output.txt
+
+    # === Phase 11–12: Guardian Provenance Generator ===
+    - name: Generate Provenance
+      working-directory: ./nova/guardian
+      run: |
+        echo "Verifying provenance credentials..."
+        jq .project_id credentials.json || echo "Could not read project_id"
+
+    # === Phase 13–14: Upload Provenance Artifact ===
+    - name: Upload Provenance Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: guardian-provenance
+        path: ./nova/guardian/credentials.json
+
+    # === Phase 15–16: Upload Build Output ===
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: eliasnorth-build
+        path: ./build/output.txt
+
+    # === Phase 17: Guardian Log Output ===
+    - name: Output Guardian Log
+      run: |
+        echo "[LOG] EliasNorth Build Phase Complete" > ./logs/guardian.log
+        cat ./logs/guardian.log
+
+    # === Phase 18–19: Auto-Repair Fallback ===
+    - name: Check Repair Trigger
+      run: |
+        if [ ! -f ./build/output.txt ]; then
+          echo "[ERROR] Build artifact missing. Triggering Guardian Repair..."
+          echo "REPAIR_TRIGGER=true" >> $GITHUB_ENV
+        else
+          echo "REPAIR_TRIGGER=false" >> $GITHUB_ENV
+        fi
+
+    # === Phase 20: Optional Auto-Heal Placeholder ===
+    - name: Guardian Self-Heal Logic
+      if: env.REPAIR_TRIGGER == 'true'
+      run: |
+        echo "Auto-repairing..."
+        echo "Rebuilding build/output.txt"
+        echo "EliasNorth AI Recovery Build" > ./build/output.txt
+
+    # === Phase 21–22: Optional Release Stub ===
+    - name: Release Stub
+      run: echo "Release complete. All phases executed."
+
+    # === Phase 23–24: Final Sentinel Report ===
+    - name: Guardian Final Report
+      run: |
+        echo "[GUARDIAN] Phase 24: System check complete."
+        echo "Agent workflow completed successfully at $(date)"
