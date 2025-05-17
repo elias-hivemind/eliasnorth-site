@@ -1,0 +1,132 @@
+name: Guardian Phase 29: EliasNorth Frontend Repair + Feature Injection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-correction:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checkout frontend code
+    - name: Checkout Frontend Repo
+      uses: actions/checkout@v4
+
+    # Step 2: Install dependencies & build React app
+    - name: Install & Build React
+      run: |
+        npm install
+        npm run build
+      env:
+        NODE_ENV: production
+
+    # Step 3: Upload static site to S3
+    - name: Upload to WebsiteBucket (S3)
+      run: |
+        aws s3 sync build/ s3://eliasnorth-website-${{ secrets.AWS_ACCOUNT_ID }}/ --delete
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+
+    # Step 4: Invalidate CloudFront cache
+    - name: Invalidate CloudFront Cache
+      run: |
+        aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+          --paths "/*"
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+
+    # Step 5: Restart ECS Chat container (port 5155)
+    - name: Restart EliasPublicAI Chat Service
+      run: |
+        aws ecs update-service \
+          --cluster EliasNorthCluster \
+          --service ChatService \
+          --force-new-deployment
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+
+    # Step 6: Verify Nova backend (ping Flask API)
+    - name: Check Nova API
+      run: |
+        curl --fail http://${{ secrets.NOVA_SERVER_IP }}:5000/api/health || echo "Nova Flask API offline"
+
+    # Step 7: Auto-inject MySQL schema to RDS
+    - name: Initialize RDS Schema (Elias DB)
+      run: |
+        sudo apt-get update && sudo apt-get install mysql-client -y
+        mysql -h ${{ secrets.RDS_ENDPOINT }} -uadmin -p${{ secrets.DB_PASSWORD }} <<EOF
+        CREATE DATABASE IF NOT EXISTS eliasnorth;
+        USE eliasnorth;
+        CREATE TABLE IF NOT EXISTS estates (
+          estate_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          name VARCHAR(255) NOT NULL,
+          type ENUM('residential', 'commercial', 'land') NOT NULL,
+          address VARCHAR(500),
+          location POINT,
+          price DECIMAL(15,2),
+          status ENUM('for_sale', 'for_rent', 'sold', 'abandoned') NOT NULL,
+          blockchain_hash VARCHAR(256),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS users (
+          user_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          role ENUM('buyer', 'seller', 'agent', 'investor', 'scout', 'lender') NOT NULL,
+          verified BOOLEAN DEFAULT FALSE,
+          verification_id VARCHAR(255),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS listings (
+          listing_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          estate_id BIGINT,
+          user_id BIGINT,
+          mls_id VARCHAR(50),
+          status ENUM('active', 'inactive') NOT NULL,
+          FOREIGN KEY (estate_id) REFERENCES estates(estate_id),
+          FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
+        CREATE TABLE IF NOT EXISTS loans (
+          loan_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          lender_id BIGINT,
+          borrower_id BIGINT,
+          estate_id BIGINT,
+          amount DECIMAL(15,2),
+          status ENUM('proposed', 'approved', 'repaid') NOT NULL,
+          smart_contract_id VARCHAR(255),
+          FOREIGN KEY (lender_id) REFERENCES users(user_id),
+          FOREIGN KEY (borrower_id) REFERENCES users(user_id),
+          FOREIGN KEY (estate_id) REFERENCES estates(estate_id)
+        );
+        CREATE TABLE IF NOT EXISTS scouting (
+          scout_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          user_id BIGINT,
+          estate_id BIGINT,
+          photos JSON,
+          location POINT,
+          status ENUM('pending', 'verified') NOT NULL,
+          payment DECIMAL(10,2),
+          blockchain_transaction_id VARCHAR(255),
+          FOREIGN KEY (user_id) REFERENCES users(user_id),
+          FOREIGN KEY (estate_id) REFERENCES estates(estate_id)
+        );
+        CREATE TABLE IF NOT EXISTS analytics (
+          analytic_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          estate_id BIGINT,
+          metric ENUM('price_trend', 'traffic', 'conversion') NOT NULL,
+          value JSON,
+          FOREIGN KEY (estate_id) REFERENCES estates(estate_id)
+        );
+        EOF
+
+    # Step 8: Log Fix Completion
+    - name: Guardian Log — Deployment Fix Complete
+      run: |
+        echo "[PHASE 29] Deployment Fix and Feature Load completed at $(date)" >> guardian.log
+        cat guardian.log
