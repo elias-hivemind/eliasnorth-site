@@ -1,0 +1,68 @@
+name: SLSA Generic Generator
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  slsa-chain:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checkout Code
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Step 2: Prepare folders
+    - name: Setup folders
+      run: |
+        mkdir -p ./credentials
+        mkdir -p ./slsa-generic-generator
+
+    # Step 3: Auto-fetch credentials.json (from Nova GitHub repo)
+    - name: Sync credentials from Nova repo
+      run: |
+        echo "Fetching credentials.json from Nova GitHub backup..."
+        curl -s -o ./credentials/credentials.json https://raw.githubusercontent.com/elias-hivemind/project-eliashive/main/credentials/credentials.json
+
+    # Step 4: Validate credentials.json
+    - name: Check credentials
+      run: |
+        if [ ! -s ./credentials/credentials.json ]; then
+          echo "ERROR: credentials.json not found or empty."
+          exit 1
+        fi
+        echo "Credentials validated."
+
+    # Step 5: Copy credentials for generator step
+    - name: Move credentials into generator directory
+      run: cp ./credentials/credentials.json ./slsa-generic-generator/credentials.json
+
+    # Step 6: Build Simulation
+    - name: Build
+      run: echo "Build successful."
+
+    # Step 7: Detect Environment
+    - name: Detect Env
+      run: |
+        echo "node_version=$(node -v)" >> $GITHUB_OUTPUT
+        echo "os=$RUNNER_OS" >> $GITHUB_OUTPUT
+
+    # Step 8: Provenance Generator
+    - name: Run Generator
+      working-directory: ./slsa-generic-generator
+      run: |
+        echo "Running generator..."
+        jq .project_id credentials.json || echo "JQ not installed or project_id missing"
+
+    # Step 9: Upload Artifact
+    - name: Upload credentials artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: provenance-credentials
+        path: ./slsa-generic-generator/credentials.json
+
+    # Step 10: Optional release trigger
+    - name: Create Release Step (placeholder)
+      run: echo "Release process placeholder complete."
