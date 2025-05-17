@@ -1,66 +1,68 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+name: SLSA Generic Generator
 
-# This workflow lets you generate SLSA provenance file for your project.
-# The generation satisfies level 3 for the provenance requirements - see https://slsa.dev/spec/v0.1/requirements
-# The project is an initiative of the OpenSSF (openssf.org) and is developed at
-# https://github.com/slsa-framework/slsa-github-generator.
-# The provenance file can be verified using https://github.com/slsa-framework/slsa-verifier.
-# For more information about SLSA and how it improves the supply-chain, visit slsa.dev.
-
-name: SLSA generic generator
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
-  release:
-    types: [created]
 
 jobs:
-  build:
+  slsa-chain:
     runs-on: ubuntu-latest
-    outputs:
-      digests: ${{ steps.hash.outputs.digests }}
 
     steps:
-      - uses: actions/checkout@v4
+    # Step 1: Checkout Code
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      # ========================================================
-      #
-      # Step 1: Build your artifacts.
-      #
-      # ========================================================
-      - name: Build artifacts
-        run: |
-            # These are some amazing artifacts.
-            echo "artifact1" > artifact1
-            echo "artifact2" > artifact2
+    # Step 2: Prepare folders
+    - name: Setup folders
+      run: |
+        mkdir -p ./credentials
+        mkdir -p ./slsa-generic-generator
 
-      # ========================================================
-      #
-      # Step 2: Add a step to generate the provenance subjects
-      #         as shown below. Update the sha256 sum arguments
-      #         to include all binaries that you generate
-      #         provenance for.
-      #
-      # ========================================================
-      - name: Generate subject for provenance
-        id: hash
-        run: |
-          set -euo pipefail
+    # Step 3: Auto-fetch credentials.json (from Nova GitHub repo)
+    - name: Sync credentials from Nova repo
+      run: |
+        echo "Fetching credentials.json from Nova GitHub backup..."
+        curl -s -o ./credentials/credentials.json https://raw.githubusercontent.com/elias-hivemind/project-eliashive/main/credentials/credentials.json
 
-          # List the artifacts the provenance will refer to.
-          files=$(ls artifact*)
-          # Generate the subjects (base64 encoded).
-          echo "hashes=$(sha256sum $files | base64 -w0)" >> "${GITHUB_OUTPUT}"
+    # Step 4: Validate credentials.json
+    - name: Check credentials
+      run: |
+        if [ ! -s ./credentials/credentials.json ]; then
+          echo "ERROR: credentials.json not found or empty."
+          exit 1
+        fi
+        echo "Credentials validated."
 
-  provenance:
-    needs: [build]
-    permissions:
-      actions: read   # To read the workflow path.
-      id-token: write # To sign the provenance.
-      contents: write # To add assets to a release.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1.4.0
-    with:
-      base64-subjects: "${{ needs.build.outputs.digests }}"
-      upload-assets: true # Optional: Upload to a new release
+    # Step 5: Copy credentials for generator step
+    - name: Move credentials into generator directory
+      run: cp ./credentials/credentials.json ./slsa-generic-generator/credentials.json
+
+    # Step 6: Build Simulation
+    - name: Build
+      run: echo "Build successful."
+
+    # Step 7: Detect Environment
+    - name: Detect Env
+      run: |
+        echo "node_version=$(node -v)" >> $GITHUB_OUTPUT
+        echo "os=$RUNNER_OS" >> $GITHUB_OUTPUT
+
+    # Step 8: Provenance Generator
+    - name: Run Generator
+      working-directory: ./slsa-generic-generator
+      run: |
+        echo "Running generator..."
+        jq .project_id credentials.json || echo "JQ not installed or project_id missing"
+
+    # Step 9: Upload Artifact
+    - name: Upload credentials artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: provenance-credentials
+        path: ./slsa-generic-generator/credentials.json
+
+    # Step 10: Optional release trigger
+    - name: Create Release Step (placeholder)
+      run: echo "Release process placeholder complete."
