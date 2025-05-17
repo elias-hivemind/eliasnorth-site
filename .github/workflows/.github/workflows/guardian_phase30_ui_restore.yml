@@ -1,0 +1,73 @@
+name: Guardian Phase 30: Full EliasNova Website + Watchdog
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sentinel-ui-restore:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Checkout Repo
+    - name: Checkout UI and backend source
+      uses: actions/checkout@v4
+
+    # Step 2: Install and Build React UI
+    - name: Install & Build React (Nova UI)
+      run: |
+        npm install
+        npm run build
+
+    # Step 3: Upload UI to S3 (Live Dashboard)
+    - name: Upload UI to S3
+      run: |
+        aws s3 sync build/ s3://eliasnorth-website-${{ secrets.AWS_ACCOUNT_ID }}/ --delete
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+
+    # Step 4: Invalidate CloudFront Cache
+    - name: Invalidate CDN Cache
+      run: |
+        aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+          --paths "/*"
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+
+    # Step 5: Sentinel Watchdog Check
+    - name: Guardian Sentinel Health Check
+      run: |
+        echo "[Guardian] Verifying live site..."
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://eliasnorth.com)
+        if [ "$STATUS" != "200" ]; then
+          echo "[Guardian] ERROR: UI failed to load. Triggering fallback to Nova..."
+          curl -X POST https://api.eliasnorth.com/guardian/fix-ui \
+            -H "Content-Type: application/json" \
+            -d '{"reason": "blank site", "source": "guardian_phase30"}'
+          exit 1
+        else
+          echo "[Guardian] UI is active and healthy."
+        fi
+
+    # Step 6: Confirm All Critical Files Are Present
+    - name: Guardian File Check
+      run: |
+        REQUIRED_FILES=("index.html" "main.css" "bundle.js" "guardian_lock.json" "vaults/index.json")
+        for FILE in "${REQUIRED_FILES[@]}"; do
+          if ! aws s3 ls s3://eliasnorth-website-${{ secrets.AWS_ACCOUNT_ID }}/$FILE; then
+            echo "[Guardian] Missing $FILE. Pinging Nova recovery API..."
+            curl -X POST https://api.eliasnorth.com/recover/missing \
+              -H "Content-Type: application/json" \
+              -d '{"filename": "'$FILE'", "trigger": "guardian_phase30"}'
+          fi
+        done
+
+    # Step 7: Log Completion
+    - name: Log Guardian Phase 30 Completion
+      run: |
+        echo "[Guardian Phase 30] Deployment complete at $(date)" >> /tmp/guardian_phase30.log
+        cat /tmp/guardian_phase30.log
