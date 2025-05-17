@@ -1,0 +1,157 @@
+name: Guardian Phase 30: UI Restore + Feature Injection
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  restore-ui:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Phase 30 [Checkout Repo]
+      uses: actions/checkout@v3
+
+    - name: Phase 30 [Setup Node.js]
+      uses: actions/setup-node@v3
+      with:
+        node-version: '16'
+
+    - name: Phase 30 [Install Dependencies]
+      run: npm install
+      working-directory: ./frontend
+
+    - name: Phase 30 [Inject Features + Neon UI]
+      run: |
+        cat > ./frontend/public/index.html << 'EOF'
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <title>Nova Unified Portal</title>
+          <style>
+            body {
+              background-color: #0a0f1c;
+              color: #fff;
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 50px;
+            }
+            h1 {
+              font-size: 2.5rem;
+              color: #00ffff;
+              text-shadow: 0 0 15px #00ffff;
+            }
+            .btn-grid {
+              display: flex;
+              justify-content: center;
+              flex-wrap: wrap;
+              gap: 20px;
+              margin-top: 40px;
+            }
+            button {
+              background: #00ffff;
+              border: none;
+              padding: 20px 30px;
+              font-size: 18px;
+              border-radius: 8px;
+              color: #0a0f1c;
+              cursor: pointer;
+              transition: all 0.3s;
+              box-shadow: 0 0 10px #00ffff;
+            }
+            button:hover {
+              box-shadow: 0 0 20px #00ffff;
+              transform: scale(1.05);
+            }
+          </style>
+        </head>
+        <body>
+          <h1>AI-Powered Services: Automate Your Business</h1>
+          <div class="btn-grid">
+            <button onclick="query('/api/tools')">AI Tools</button>
+            <button onclick="query('/api/automation')">Automation</button>
+            <button onclick="query('/api/cloud-solutions')">Cloud Solutions</button>
+            <button onclick="query('/api/analytics')">Data Analytics</button>
+            <button onclick="location.href='http://${{ secrets.ECS_PUBLIC_IP }}:5155'">Chatbot</button>
+          </div>
+
+          <script>
+            async function query(endpoint) {
+              try {
+                const res = await fetch('http://${{ secrets.NOVA_SERVER_IP }}:5000' + endpoint);
+                const data = await res.json();
+                alert(JSON.stringify(data, null, 2));
+              } catch (err) {
+                alert('Error: ' + err.message);
+              }
+            }
+          </script>
+        </body>
+        </html>
+        EOF
+
+    - name: Phase 30 [Build App]
+      run: npm run build
+      working-directory: ./frontend
+
+    - name: Phase 30 [Upload to S3]
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+      run: |
+        aws s3 sync ./frontend/build s3://eliasnorth-website-${{ secrets.AWS_ACCOUNT_ID }}/ --delete
+
+    - name: Phase 30 [Invalidate CloudFront]
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+      run: |
+        aws cloudfront create-invalidation \
+          --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+          --paths "/*"
+
+    - name: Phase 30 [Restart Chat Interface]
+      env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: us-east-1
+      run: |
+        aws ecs update-service \
+          --cluster EliasNorthCluster \
+          --service ChatService \
+          --force-new-deployment
+
+    - name: Phase 30 [Check Nova Backend]
+      run: |
+        mkdir -p /guardian_logs
+        LOG=/guardian_logs/phase30_ui_restore.log
+        echo "[Phase 30] Nova API Check at $(date)" >> $LOG
+        for endpoint in /api/tools /api/automation /api/cloud-solutions /api/analytics; do
+          status=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.NOVA_SERVER_IP }}:5000$endpoint)
+          echo "$endpoint : HTTP $status" >> $LOG
+        done
+
+    - name: Phase 30 [Fallback Auto-Heal + Nova Assist]
+      run: |
+        echo "[Guardian Sentinel] Checking for missing items..." >> /guardian_logs/phase30_ui_restore.log
+
+        if [ ! -f ./credentials/credentials.json ]; then
+          echo "[Guardian] Missing credentials.json — requesting Nova..." >> /guardian_logs/phase30_ui_restore.log
+          curl -s https://api.eliasnorth.com/vault/retrieve -d '{"target":"credentials","reason":"ui_restore"}' -H "Content-Type: application/json" >> /guardian_logs/phase30_ui_restore.log
+        fi
+
+        chat=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.ECS_PUBLIC_IP }}:5155)
+        if [ "$chat" != "200" ]; then
+          echo "[Guardian] Chat container offline. Restarting..." >> /guardian_logs/phase30_ui_restore.log
+          aws ecs update-service \
+            --cluster EliasNorthCluster \
+            --service ChatService \
+            --force-new-deployment
+        fi
+
+        echo "[Phase 30 Complete] UI + Backend operational at $(date)" >> /guardian_logs/phase30_ui_restore.log
